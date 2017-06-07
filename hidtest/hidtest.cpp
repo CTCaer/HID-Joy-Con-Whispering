@@ -138,14 +138,20 @@ void spi_write(hid_device *handle, uint32_t offs, uint8_t *data, uint8_t len)
     *offset = offs;
     memcpy(&spi_write[0x5], data, len);
    
-    int max_write_count = 30;
+    int max_write_count = 2000;
+    int write_count = 0;
     do
     {
         //usleep(300000);
+        write_count += 1;
         memcpy(buf, spi_write, 0x39);
         joycon_send_subcommand(handle, 0x1, 0x11, buf, 0x26);
     }
-    while(buf[0x10 + (bluetooth ? 0 : 10)] != 0x11 && buf[0] != (bluetooth ? 0x21 : 0x81));
+    while((buf[0x10 + (bluetooth ? 0 : 10)] != 0x11 && buf[0] != (bluetooth ? 0x21 : 0x81))
+        && write_count < max_write_count);
+	if(write_count > max_write_count)
+        printf("ERROR: Write error or timeout\nSkipped writing of %dBytes at address 0x%05X...\n", 
+            *length, *offset);
 }
 
 void spi_read(hid_device *handle, uint32_t offs, uint8_t *data, uint8_t len)
@@ -158,14 +164,20 @@ void spi_read(hid_device *handle, uint32_t offs, uint8_t *data, uint8_t len)
     *length = len;
     *offset = offs;
    
-    int max_read_count = 30;
+    int max_read_count = 2000;
+	int read_count = 0;
     do
     {
         //usleep(300000);
+		read_count += 1;
         memcpy(buf, spi_read_cmd, 0x36);
         joycon_send_subcommand(handle, 0x1, 0x10, buf, 0x26);
     }
-    while(*(uint32_t*)&buf[0xF + (bluetooth ? 0 : 10)] != *offset);
+    while(*(uint32_t*)&buf[0xF + (bluetooth ? 0 : 10)] != *offset && read_count < max_read_count);
+	if(read_count > max_read_count)
+        printf("ERROR: Read error or timeout\nSkipped reading of %dBytes at address 0x%05X...\n", 
+            *length, *offset);
+
     
     memcpy(data, &buf[0x14 + (bluetooth ? 0 : 10)], len);
 }
@@ -187,16 +199,27 @@ void spi_flash_dump(hid_device *handle, char *out_path)
     {
         // HACK/TODO: hid_exchange loves to return data from the wrong addr, or 0x30 (NACK?) packets
         // so let's make sure our returned data is okay before writing
+        int max_read_count = 2000;
+        int read_count = 0;
         while(1)
         {
+            read_count += 1;
             memcpy(buf, spi_read_cmd, 0x26);
             joycon_send_subcommand(handle, 0x1, 0x10, buf, 0x26);
             
             // sanity-check our data, loop if it's not good
-            if((buf[0] == (bluetooth ? 0x21 : 0x81)) && (*(uint32_t*)&buf[0xF + (bluetooth ? 0 : 10)] == *offset))
+            if((buf[0] == (bluetooth ? 0x21 : 0x81)
+                && *(uint32_t*)&buf[0xF + (bluetooth ? 0 : 10)] == *offset) 
+                || read_count > max_read_count)
                 break;
         }
-        
+
+        if(read_count > max_read_count)
+        {
+			printf("\n\nERROR: Read error or timeout.\nSkipped dumping of %dB at address 0x%05X...\n\n", 
+                data_rate, *offset);
+            return;
+        }
         fwrite(buf + (0x14 + (bluetooth ? 0 : 10)) * sizeof(char), 0x1C, 1, dump);
         
         if((*offset & 0xFF) == 0) // less spam
