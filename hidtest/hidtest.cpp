@@ -127,42 +127,6 @@ void joycon_send_subcommand(hid_device *handle, int command, int subcommand, uin
         memcpy(data, buf, 0x40); //TODO
 }
 
-void spi_flash_dump(hid_device *handle, char *out_path)
-{
-    unsigned char buf[0x400];
-    uint8_t *spi_read = (uint8_t*)calloc(1, 0x26 * sizeof(uint8_t));
-    
-    FILE *dump = fopen(out_path, "wb");
-    if(dump == NULL)
-    {
-        printf("Failed to open dump file %s, aborting...\n", out_path);
-        return;
-    }
-    
-    uint32_t* offset = (uint32_t*)(&spi_read[0x0]);
-    for(*offset = 0x0; *offset < 0x80000; *offset += 0x1C)
-    {
-        // HACK/TODO: hid_exchange loves to return data from the wrong addr, or 0x30 (NACK?) packets
-        // so let's make sure our returned data is okay before writing
-        while(1)
-        {
-            memcpy(buf, spi_read, 0x26);
-            joycon_send_subcommand(handle, 0x1, 0x10, buf, 0x26);
-            
-            // sanity-check our data, loop if it's not good
-            if((buf[0] == (bluetooth ? 0x21 : 0x81)) && (*(uint32_t*)&buf[0xF + (bluetooth ? 0 : 10)] == *offset))
-                break;
-        }
-        
-        fwrite(buf + (0x14 + (bluetooth ? 0 : 10)) * sizeof(char), 0x1C, 1, dump);
-        
-        if((*offset & 0xFF) == 0) // less spam
-            printf("\rDumped 0x%05X of 0x80000", *offset);
-    }
-    printf("\rDumped 0x80000 of 0x80000\n");
-    fclose(dump);
-}
-
 void spi_write(hid_device *handle, uint32_t offs, uint8_t *data, uint8_t len)
 {
     unsigned char buf[0x400];
@@ -187,9 +151,9 @@ void spi_write(hid_device *handle, uint32_t offs, uint8_t *data, uint8_t len)
 void spi_read(hid_device *handle, uint32_t offs, uint8_t *data, uint8_t len)
 {
     unsigned char buf[0x400];
-    uint8_t *spi_read = (uint8_t*)calloc(1, 0x26 * sizeof(uint8_t));
-    uint32_t* offset = (uint32_t*)(&spi_read[0]);
-    uint8_t* length = (uint8_t*)(&spi_read[4]);
+    uint8_t *spi_read_cmd = (uint8_t*)calloc(1, 0x26 * sizeof(uint8_t));
+    uint32_t* offset = (uint32_t*)(&spi_read_cmd[0]);
+    uint8_t* length = (uint8_t*)(&spi_read_cmd[4]);
    
     *length = len;
     *offset = offs;
@@ -198,12 +162,48 @@ void spi_read(hid_device *handle, uint32_t offs, uint8_t *data, uint8_t len)
     do
     {
         //usleep(300000);
-        memcpy(buf, spi_read, 0x36);
+        memcpy(buf, spi_read_cmd, 0x36);
         joycon_send_subcommand(handle, 0x1, 0x10, buf, 0x26);
     }
     while(*(uint32_t*)&buf[0xF + (bluetooth ? 0 : 10)] != *offset);
     
     memcpy(data, &buf[0x14 + (bluetooth ? 0 : 10)], len);
+}
+
+void spi_flash_dump(hid_device *handle, char *out_path)
+{
+    unsigned char buf[0x400];
+    uint8_t *spi_read_cmd = (uint8_t*)calloc(1, 0x26 * sizeof(uint8_t));
+    
+    FILE *dump = fopen(out_path, "wb");
+    if(dump == NULL)
+    {
+        printf("Failed to open dump file %s, aborting...\n", out_path);
+        return;
+    }
+    
+    uint32_t* offset = (uint32_t*)(&spi_read_cmd[0x0]);
+    for(*offset = 0x0; *offset < 0x80000; *offset += 0x1C)
+    {
+        // HACK/TODO: hid_exchange loves to return data from the wrong addr, or 0x30 (NACK?) packets
+        // so let's make sure our returned data is okay before writing
+        while(1)
+        {
+            memcpy(buf, spi_read_cmd, 0x26);
+            joycon_send_subcommand(handle, 0x1, 0x10, buf, 0x26);
+            
+            // sanity-check our data, loop if it's not good
+            if((buf[0] == (bluetooth ? 0x21 : 0x81)) && (*(uint32_t*)&buf[0xF + (bluetooth ? 0 : 10)] == *offset))
+                break;
+        }
+        
+        fwrite(buf + (0x14 + (bluetooth ? 0 : 10)) * sizeof(char), 0x1C, 1, dump);
+        
+        if((*offset & 0xFF) == 0) // less spam
+            printf("\rDumped 0x%05X of 0x80000", *offset);
+    }
+    printf("\rDumped 0x80000 of 0x80000\n");
+    fclose(dump);
 }
 
 int joycon_init(hid_device *handle, const wchar_t *name)
