@@ -7,6 +7,7 @@
 #include <chrono>
 #include <ctime>
 #include <cstring>
+#include <future>
 #include <hidapi/hidapi.h>
 
 #define JOYCON_L_BT (0x2006)
