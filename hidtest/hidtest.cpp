@@ -27,6 +27,12 @@ unsigned short product_ids[] = {JOYCON_L_BT, JOYCON_R_BT, PRO_CONTROLLER, JOYCON
 bool bluetooth = true;
 uint8_t global_count = 0;
 
+//Data stats keeping for dual SPI flash dumping
+uint32_t offset_joycon_r= 0x0;
+uint32_t offset_joycon_l= 0x0;
+double transfered_bytes_r = 0.0;
+double transfered_bytes_l = 0.0;
+
 void hex_dump(unsigned char *buf, int len)
 {
     for (int i = 0; i < len; i++)
@@ -182,23 +188,51 @@ void spi_read(hid_device *handle, uint32_t offs, uint8_t *data, uint8_t len)
     memcpy(data, &buf[0x14 + (bluetooth ? 0 : 10)], len);
 }
 
-void spi_flash_dump(hid_device *handle, char *out_path)
+void spi_flash_dump(hid_device *handle, int device_type, bool dual_dumping)
 {
     unsigned char buf[0x400];
     uint8_t *spi_read_cmd = (uint8_t*)calloc(1, 0x26 * sizeof(uint8_t));
+    double transfered_bytes_right_pro = 0.0;
+    int data_rate = 0x1D; //maximum SPI read packet length
+    unsigned char sn_buffer[14] = "";
+    int i=0;
+    std::string out_path = "";
+
+    //Create filename based on S/N
+    spi_read(handle, 0x6002, sn_buffer, 0xE);
     
-    FILE *dump = fopen(out_path, "wb");
+    if(sn_buffer[i] == 0x00)
+        return; //Error or Timeout on HID communucation
+
+    for (i=0; i<12; i++)
+        out_path = out_path + (char)sn_buffer[i];
+    out_path = out_path + ".bin";
+
+    if(device_type)
+        out_path = "dump_left_joycon_" + out_path;
+    else
+        out_path = "dump_right_joycon_" + out_path;
+
+    FILE *dump = fopen(out_path.c_str(), "wb");
     if(dump == NULL)
     {
-        printf("Failed to open dump file %s, aborting...\n", out_path);
+        printf("Failed to open dump file %s, aborting...\n", out_path.c_str());
         return;
     }
     
     uint32_t* offset = (uint32_t*)(&spi_read_cmd[0x0]);
-    for(*offset = 0x0; *offset < 0x80000; *offset += 0x1C)
+    for(*offset = 0x0; *offset < 0x80000; *offset += data_rate)
     {
         // HACK/TODO: hid_exchange loves to return data from the wrong addr, or 0x30 (NACK?) packets
         // so let's make sure our returned data is okay before writing
+		
+		//Set final data request to the exact bytes left
+        if (*offset == 0x7FFE6)
+            data_rate=0x1A;
+		
+		//Set length of requested data
+        spi_read_cmd[0x4]=data_rate;
+
         int max_read_count = 2000;
         int read_count = 0;
         while(1)
@@ -216,16 +250,67 @@ void spi_flash_dump(hid_device *handle, char *out_path)
 
         if(read_count > max_read_count)
         {
-			printf("\n\nERROR: Read error or timeout.\nSkipped dumping of %dB at address 0x%05X...\n\n", 
-                data_rate, *offset);
-            return;
+            if(device_type)
+            {
+                printf("\n\nERROR: Read error or timeout on Joy-Con (R).\nSkipped dumping of %dB at address 0x%05X...\n\n", 
+                    data_rate, *offset);
+                return;
+            }
+            else
+            {
+                printf("\n\nERROR: Read error or timeout on Joy-Con (L).\nSkipped dumping of %dB at address 0x%05X...\n\n", 
+                    data_rate, *offset);
+                    return;
+            }
         }
-        fwrite(buf + (0x14 + (bluetooth ? 0 : 10)) * sizeof(char), 0x1C, 1, dump);
-        
-        if((*offset & 0xFF) == 0) // less spam
-            printf("\rDumped 0x%05X of 0x80000", *offset);
+        fwrite(buf + (0x14 + (bluetooth ? 0 : 10)) * sizeof(char), data_rate, 1, dump);
+            
+			//2 joy-cons are connected
+            if(dual_dumping)
+            {
+                if(device_type == 0)
+                {
+                    offset_joycon_r = *offset;
+                    transfered_bytes_r = (*offset)/1024.0;
+                }
+                else
+                {
+                    offset_joycon_l = *offset;
+                    transfered_bytes_l = (*offset)/1024.0;
+                }
+				if((*offset & 0xFF) == 0) // less spam
+                    printf("\rJoy-Con (L): %.2fKB (0x%05X) | Joy-Con (R): %.2fKB (0x%05X)",
+                        transfered_bytes_l, offset_joycon_l, transfered_bytes_r, offset_joycon_r);
+            }
+            else //Joy-Con (R) on BT-HID or Pro controller
+            {
+                transfered_bytes_right_pro = (*offset)/1024.0;
+				if((*offset & 0xFF) == 0) // less spam
+                    printf("\rDumped %.2fKB of 512KB (0x%05X of 0x80000)",
+                        transfered_bytes_right_pro, *offset);
+            }
     }
-    printf("\rDumped 0x80000 of 0x80000\n");
+
+    //When one Joy-Con finishes earlier
+    if(dual_dumping)
+    {
+        if(device_type == 0)
+        {
+            offset_joycon_r = 0x80000;
+            transfered_bytes_r = 512.0;
+        }
+        else
+        {
+            offset_joycon_l = 0x80000;
+            transfered_bytes_l = 512.0;
+        }
+        printf("\rJoy-Con (L): %.2fKB (0x%05X) | Joy-Con (R): %.2fKB (0x%05X)",
+            transfered_bytes_l, offset_joycon_l, transfered_bytes_r, offset_joycon_r);
+    }
+    //Joy-Con (R) on BT-HID or Pro controller
+    else
+        printf("\rDumped 512KB of 512KB (0x80000 of 0x80000)\n");
+    
     fclose(dump);
 }
 
@@ -453,9 +538,19 @@ int main(int argc, char* argv[])
     
 #ifdef DUMP_SPI
     printf("Dumping controller SPI flashes...\n");
+	int right_joycon_pro = 0;
+	int left_joycon = 1;
     if(handle_l)
-        spi_flash_dump(handle_l, "left_joycon_dump.bin");
-    spi_flash_dump(handle_r, "right_joycon_dump.bin");
+    {
+        std::future<void> spi_dump_l = std::async(std::launch::async, spi_flash_dump, handle_l, left_joycon, true);
+        std::future<void> spi_dump_r = std::async(std::launch::async, spi_flash_dump, handle_r, right_joycon_pro, true);
+        spi_dump_l.get(), spi_dump_r.get();
+        printf("\rJoy-Con (L): 512.00KB (0x80000) | Joy-Con (R): 512.00KB (0x80000)\n");
+    }
+    else
+    {
+        spi_flash_dump(handle_r, right_joycon_pro, false);
+    }   
 #endif
     
 // Replays a string of hex values (ie 80 92 .. ..) separated by newlines
