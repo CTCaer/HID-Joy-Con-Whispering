@@ -236,6 +236,7 @@ void spi_flash_dump(hid_device *handle, int device_type, bool dual_dumping)
 
         int max_read_count = 2000;
         int read_count = 0;
+
         while(1)
         {
             read_count += 1;
@@ -347,7 +348,7 @@ int joycon_init(hid_device *handle, const wchar_t *name)
         buf[1] = 0x02;
         hid_exchange(handle, buf, 0x2);
         
-        printf("Switching baudrate...\n");
+        printf("Switching baudrate to 3Mbit...\n");
         
         // Switch baudrate to 3Mbit
         memset(buf, 0x00, 0x400);
@@ -382,10 +383,9 @@ int joycon_init(hid_device *handle, const wchar_t *name)
     spi_read(handle, 0x6002, sn_buffer, 0xE);
     
     printf("Successfully initialized %ls with S/N: %c%c%c%c%c%c%c%c%c%c%c%c%c%c!\n", 
-        name, sn_buffer[0], sn_buffer[1], sn_buffer[2], sn_buffer[3], 
-        sn_buffer[4], sn_buffer[5], sn_buffer[6], sn_buffer[7], sn_buffer[8], 
-        sn_buffer[9], sn_buffer[10], sn_buffer[11], sn_buffer[12], 
-        sn_buffer[13]);
+        name, sn_buffer[0], sn_buffer[1], sn_buffer[2], sn_buffer[3], sn_buffer[4], 
+        sn_buffer[5], sn_buffer[6], sn_buffer[7], sn_buffer[8], sn_buffer[9], 
+        sn_buffer[10], sn_buffer[11], sn_buffer[12], sn_buffer[13]);
     
     return 0;
 }
@@ -408,10 +408,19 @@ void joycon_deinit(hid_device *handle, const wchar_t *name)
 
 void device_print(struct hid_device_info *dev)
 {
-    printf("USB device info:\n  vid: 0x%04hX pid: 0x%04hX\n  path: %s\n  MAC: %ls\n  interface_number: %d\n",
-        dev->vendor_id, dev->product_id, dev->path, dev->serial_number, dev->interface_number);
-    printf("  Manufacturer: %ls\n", dev->manufacturer_string);
-    printf("  Product:      %ls\n\n", dev->product_string);
+    const wchar_t *interface_name = L"";
+
+    if (wcscmp(dev->serial_number, L"000000000001"))
+        interface_name = L"BT-HID";
+    else
+        interface_name = L"USB-HID";
+
+    printf("USB device info:\n  VID:          0x%04hX\n" \
+        "  PID:          0x%04hX\n  Dev Path:     %s\n" \
+        "  MAC:          %ls\n  Interface:    %ls (%d)\n  Manufacturer: %ls\n" \
+        "  Product:      %ls\n\n", dev->vendor_id, dev->product_id, 
+        dev->path, dev->serial_number, interface_name, dev->interface_number, 
+        dev->manufacturer_string, dev->product_string);
 }
 
 int main(int argc, char* argv[])
@@ -625,9 +634,12 @@ int main(int argc, char* argv[])
            color_buffer[0], color_buffer[1], color_buffer[2],
            color_buffer[3], color_buffer[4], color_buffer[5]);
     printf("It's probably safe to exit while this is going, but please wait while it writes...\n");
-   
+    
+	//Comment out to disable color change on Right Joy-Con or Pro controller
     spi_write(handle_r, 0x6050, color_buffer, 6);
+
     if(handle_l)
+		//Comment out to disable color change on LEFT Joy-Con
         spi_write(handle_l, 0x6050, color_buffer, 6);
     printf("Writes completed.\n");
 #endif
